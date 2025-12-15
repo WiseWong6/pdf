@@ -1,6 +1,7 @@
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import * as pdfjsLib from 'pdfjs-dist'; 
+import JSZip from 'jszip';
 import { 
   FileText, 
   Upload, 
@@ -156,6 +157,39 @@ const App: React.FC = () => {
 
   const escapeCsvValue = (value: string) => `"${value.replace(/"/g, '""')}"`;
 
+  const sanitizeEvalImageFileName = (name: string) =>
+    name.replace(/[\\/:*?"<>|\u0000-\u001F]/g, '_').replace(/\s+/g, ' ').trim();
+
+  const parseDataUrl = (dataUrl: string) => {
+    const match = /^data:([^;]+);base64,([\s\S]+)$/.exec(dataUrl);
+    if (!match) return null;
+    const mimeType = match[1];
+    const base64 = match[2];
+    return { mimeType, base64 };
+  };
+
+  const base64ToBytes = (base64: string) => {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  };
+
+  const getImageExtension = (mimeType: string) => {
+    switch (mimeType) {
+      case 'image/jpeg':
+        return 'jpg';
+      case 'image/png':
+        return 'png';
+      case 'image/webp':
+        return 'webp';
+      default:
+        return 'bin';
+    }
+  };
+
   const buildEvalDatasetCsv = (rows: EvalDatasetRow[]) => {
     const lines: string[] = [];
     lines.push(EVAL_CSV_HEADER_CN.map(escapeCsvValue).join(','));
@@ -166,8 +200,7 @@ const App: React.FC = () => {
     return lines.join('\r\n');
   };
 
-  const downloadTextFile = (filename: string, content: string, mimeType: string) => {
-    const blob = new Blob([content], { type: mimeType });
+  const downloadBlobFile = (filename: string, blob: Blob) => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -176,6 +209,10 @@ const App: React.FC = () => {
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
+  };
+
+  const downloadTextFile = (filename: string, content: string, mimeType: string) => {
+    downloadBlobFile(filename, new Blob([content], { type: mimeType }));
   };
 
   const syncCurrentPageToEvalDataset = () => {
@@ -208,6 +245,43 @@ const App: React.FC = () => {
   const exportEvalDatasetCsv = () => {
     const csv = buildEvalDatasetCsv(evalDatasetRows);
     downloadTextFile('eval_dataset.csv', csv, 'text/csv;charset=utf-8');
+  };
+
+  const exportEvalDatasetZip = async () => {
+    if (evalDatasetRows.length === 0) return;
+
+    const zip = new JSZip();
+    const imagesDir = zip.folder('images');
+    if (!imagesDir) {
+      alert("创建压缩包失败。");
+      return;
+    }
+
+    const rowsWithPaths: EvalDatasetRow[] = [];
+
+    for (const row of evalDatasetRows) {
+      const parsed = parseDataUrl(row.pdf_img);
+      if (!parsed) {
+        alert(`图片数据格式不正确：${row.name}`);
+        return;
+      }
+      const ext = getImageExtension(parsed.mimeType);
+      const safeName = sanitizeEvalImageFileName(row.name);
+      const fileName = `${safeName}.${ext}`;
+
+      imagesDir.file(fileName, base64ToBytes(parsed.base64), { binary: true });
+      rowsWithPaths.push({ ...row, pdf_img: `images/${fileName}` });
+    }
+
+    zip.file('eval_dataset.csv', buildEvalDatasetCsv(rowsWithPaths));
+
+    try {
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+      downloadBlobFile('eval_dataset.zip', blob);
+    } catch (e) {
+      console.error(e);
+      alert("导出 ZIP 失败，请重试。");
+    }
   };
 
   const clearEvalDataset = () => {
@@ -856,10 +930,10 @@ const App: React.FC = () => {
                   <ArrowUp size={14} /> 同步
                 </button>
                 <button
-                  onClick={exportEvalDatasetCsv}
+                  onClick={exportEvalDatasetZip}
                   disabled={evalDatasetRows.length === 0}
                   className="px-2 py-1 rounded flex items-center gap-1 text-xs font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="导出 eval_dataset.csv（下载后覆盖 eval_data/eval_dataset.csv）"
+                  title="导出 eval_dataset.zip（包含 eval_dataset.csv + images/ 图片文件）"
                 >
                   <ArrowDown size={14} /> 导出
                 </button>
