@@ -1,6 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Document, Page } from 'react-pdf';
+import { Document, Page, pdfjs } from 'react-pdf';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2, RotateCw, Maximize } from 'lucide-react';
+
+// Reduce noisy PDF.js warnings in console
+try {
+  const pdfjsAny = pdfjs as any;
+  pdfjsAny.setVerbosityLevel?.(pdfjsAny.VerbosityLevel?.ERRORS ?? 0);
+  pdfjsAny.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
+} catch {
+  // ignore
+}
 
 interface PdfViewerProps {
   url: string;

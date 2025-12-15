@@ -45,6 +45,15 @@ const SPLIT_MARKER = '<--- Page Split --->';
 const OVERSCROLL_THRESHOLD = 80;
 const MAX_CONCURRENT_JOBS = 1; 
 
+type EvalDatasetRow = {
+  name: string;
+  ocr_text: string;
+  pdf_img: string;
+};
+
+const EVAL_CSV_HEADER_CN = ['名称', 'ocr结果', '图片'] as const;
+const EVAL_CSV_HEADER_TYPES = ['name', 'ocr_text', 'pdf_img'] as const;
+
 const OCR_PROMPT_PRESETS = [
   { label: '标准 Markdown (文档转MD)', value: '<image>\n<|grounding|>Convert the document to markdown.' },
   { label: '无布局流式文本 (Free OCR)', value: '<image>\nFree OCR.' },
@@ -82,6 +91,9 @@ const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [verifierPromptInput, setVerifierPromptInput] = useState('');
+
+  // Eval dataset (in-memory, export as CSV)
+  const [evalDatasetRows, setEvalDatasetRows] = useState<EvalDatasetRow[]>([]);
   
   // Process Control
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -141,6 +153,58 @@ const App: React.FC = () => {
   }, [activeFile, editorPage]);
 
   const currentVerificationStatus = currentPageData?.verificationResult;
+
+  const escapeCsvValue = (value: string) => `"${value.replace(/"/g, '""')}"`;
+
+  const buildEvalDatasetCsv = (rows: EvalDatasetRow[]) => {
+    const lines: string[] = [];
+    lines.push(EVAL_CSV_HEADER_CN.map(escapeCsvValue).join(','));
+    lines.push(EVAL_CSV_HEADER_TYPES.map(escapeCsvValue).join(','));
+    for (const row of rows) {
+      lines.push([row.name, row.ocr_text, row.pdf_img].map(escapeCsvValue).join(','));
+    }
+    return lines.join('\r\n');
+  };
+
+  const downloadTextFile = (filename: string, content: string, mimeType: string) => {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const syncCurrentPageToEvalDataset = () => {
+    if (!activeFile) {
+      alert("未选择文件。");
+      return;
+    }
+    if (!currentPageData?.rawOCR) {
+      alert("当前页还没有 OCR 结果。");
+      return;
+    }
+    if (!currentPageData.pdfImg) {
+      alert("当前页截图尚未生成，请稍后重试。");
+      return;
+    }
+
+    const baseName = activeFile.name.replace(/\.[^.]+$/, '');
+    const rowName = `${baseName}_${currentPhysicalPage}`;
+
+    setEvalDatasetRows(prev => ([
+      ...prev,
+      { name: rowName, ocr_text: currentPageData.rawOCR, pdf_img: currentPageData.pdfImg as string }
+    ]));
+  };
+
+  const exportEvalDatasetCsv = () => {
+    const csv = buildEvalDatasetCsv(evalDatasetRows);
+    downloadTextFile('eval_dataset.csv', csv, 'text/csv;charset=utf-8');
+  };
 
   // Check API Key on Mount
   useEffect(() => {
@@ -823,6 +887,41 @@ const App: React.FC = () => {
                     value={verifierPromptInput}
                     onChange={(e) => setVerifierPromptInput(e.target.value)}
                   />
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="text-sm font-semibold text-slate-800">评测集同步（CSV）</div>
+                    <div className="text-xs text-slate-500">已收集 {evalDatasetRows.length} 条</div>
+                  </div>
+                  <div className="text-xs text-slate-600 leading-relaxed mb-3">
+                    点击“同步当前页”会把当前页的 OCR 文本与截图（Base64）加入内存评测集；再点“导出 CSV”生成文件，可覆盖仓库里的 `eval_data/eval_dataset.csv`。
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={syncCurrentPageToEvalDataset}
+                      className="flex-1 bg-white hover:bg-slate-100 text-slate-700 font-medium py-2 rounded-lg transition-colors border border-slate-200"
+                      disabled={!activeFile || !currentPageData?.rawOCR || !currentPageData?.pdfImg}
+                      title={!currentPageData?.pdfImg ? "等待当前页截图生成" : "同步当前页到评测集"}
+                    >
+                      同步当前页
+                    </button>
+                    <button
+                      onClick={exportEvalDatasetCsv}
+                      className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={evalDatasetRows.length === 0}
+                    >
+                      导出 CSV
+                    </button>
+                  </div>
+                  <div className="mt-2">
+                    <button
+                      onClick={() => setEvalDatasetRows([])}
+                      className="w-full bg-transparent hover:bg-slate-100 text-slate-600 text-xs py-2 rounded-lg transition-colors"
+                      disabled={evalDatasetRows.length === 0}
+                    >
+                      清空评测集
+                    </button>
+                  </div>
                 </div>
               </div>
               <div className="mt-6">

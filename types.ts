@@ -4,6 +4,7 @@ export type ProcessingStatus = 'idle' | 'queued' | 'processing' | 'completed' | 
 export interface PageData {
   rawOCR: string; // Result from DeepSeek
   restored: string | null; // Result from Qwen (null if not yet done)
+  pdfImg?: string; // Base64 DataURL screenshot for the page (used for eval export)
   status: 'pending' | 'ocr_success' | 'restoring' | 'complete' | 'error';
   verificationResult?: { 
     hasTable: boolean; 

@@ -74,6 +74,13 @@ const cleanOcrNoise = (text: string): string => {
   return cleaned.trim();
 };
 
+type RestorationContext = {
+  fileName: string;
+  pageNum: number;
+};
+
+const formatRestorerTag = (ctx: RestorationContext) => `[Restorer][${ctx.fileName}][Page ${ctx.pageNum}]`;
+
 // --- STEP 1: OCR ---
 const callOcrModel = async (
   imageBase64: string, 
@@ -84,7 +91,7 @@ const callOcrModel = async (
   signal?: AbortSignal
 ): Promise<string> => {
   let lastError: any;
-  console.log(`[OCR] Starting Request for ${pageLabel}...`);
+  console.log(`[OCR][${pageLabel}] Starting Request...`);
 
   // Default Official Prompt
   const defaultPrompt = '<image>\n<|grounding|>Convert the document to markdown.';
@@ -154,11 +161,13 @@ const callLayoutRestorationModel = async (
   imageBase64: string,
   rawOcrText: string,
   apiKey: string,
+  context: RestorationContext,
   signal?: AbortSignal,
   retries = 3 
 ): Promise<{ content: string; hasRealTable: boolean; cleaned: boolean; reasoning?: string }> => {
   
-  console.log("[Restorer] Starting Table Detection & Restoration...");
+  const tag = formatRestorerTag(context);
+  console.log(`${tag} Starting Table Detection & Restoration...`);
   
   // 1. Split Text by Table Tags
   // Uses capture group () to include the separator (the table tag itself) in the result array
@@ -166,7 +175,7 @@ const callLayoutRestorationModel = async (
   
   // If no tables found, return original text immediately (preserves everything)
   if (parts.length <= 1) {
-     console.log("[Restorer] Split produced 1 part (No tables detected). Skipping restoration.");
+     console.log(`${tag} Split produced 1 part (No tables detected). Skipping restoration.`);
      return { content: rawOcrText, hasRealTable: false, cleaned: false, reasoning: "No tables detected in OCR." };
   }
 
@@ -175,7 +184,7 @@ const callLayoutRestorationModel = async (
   let hasAnyRealTable = false;
   let hasAnyCleaned = false;
 
-  console.log(`[Restorer] Found ${Math.floor(parts.length / 2)} potential tables (Total parts: ${parts.length}). Processing segments...`);
+  console.log(`${tag} Found ${Math.floor(parts.length / 2)} potential tables (Total parts: ${parts.length}). Processing segments...`);
 
   const processedParts = await Promise.all(parts.map(async (part, index) => {
     // Check if this part is a table. If not, return it AS IS (Preserve Text)
@@ -184,7 +193,7 @@ const callLayoutRestorationModel = async (
     }
 
     const tableIndex = Math.floor(index / 2) + 1;
-    console.log(`[Restorer] Processing Table #${tableIndex} (HTML Length: ${part.length})...`);
+    console.log(`${tag} Processing Table #${tableIndex} (HTML Length: ${part.length})...`);
 
     // It is a table. Extract it and ask AI to judge/redraw just this part.
     const tableHtml = part;
@@ -196,7 +205,7 @@ const callLayoutRestorationModel = async (
         if (signal?.aborted) throw new Error("Process aborted by user");
 
         try {
-            console.log(`[Restorer] Sending request for Table #${tableIndex} to ${VERIFIER_MODEL_NAME}...`);
+            console.log(`${tag} Sending request for Table #${tableIndex} to ${VERIFIER_MODEL_NAME}...`);
             const response = await fetch(`${BASE_URL}/chat/completions`, {
                 method: 'POST',
                 headers: {
@@ -235,8 +244,8 @@ const callLayoutRestorationModel = async (
             // SiliconFlow/DeepSeek style: reasoning might be in `reasoning_content`
             const reasoningContent = message?.reasoning_content || ''; 
             if (reasoningContent) {
-                console.log(`[Restorer] Table #${tableIndex} Reasoning Captured.`);
-                fullReasoningLog += `\n[Table #${tableIndex} Thinking]:\n${reasoningContent}\n`;
+                console.log(`${tag} Table #${tableIndex} Reasoning Captured.`);
+                fullReasoningLog += `\n[${context.fileName}][Page ${context.pageNum}][Table #${tableIndex} Thinking]:\n${reasoningContent}\n`;
             }
 
             // Clean Markdown wrappers
@@ -245,7 +254,7 @@ const callLayoutRestorationModel = async (
                 .replace(/\s*```$/i, '')
                 .trim();
 
-            console.log(`[Restorer] Table #${tableIndex} Response Length: ${finalContent.length}`);
+            console.log(`${tag} Table #${tableIndex} Response Length: ${finalContent.length}`);
             
             // Check results
             const outputHasHtmlTable = /<table/i.test(finalContent);
@@ -253,10 +262,10 @@ const callLayoutRestorationModel = async (
             
             if (outputHasHtmlTable || outputHasMarkdownTable) {
                 hasAnyRealTable = true;
-                console.log(`[Restorer] Table #${tableIndex} Decision: KEEP as Table`);
+                console.log(`${tag} Table #${tableIndex} Decision: KEEP as Table`);
             } else {
                 hasAnyCleaned = true;
-                console.log(`[Restorer] Table #${tableIndex} Decision: CONVERT to Text`);
+                console.log(`${tag} Table #${tableIndex} Decision: CONVERT to Text`);
             }
             
             // Success: Return the restored segment
@@ -266,11 +275,11 @@ const callLayoutRestorationModel = async (
             if (error.name === 'AbortError' || signal?.aborted) throw new Error("Process aborted by user");
             
             // Log warning
-            console.warn(`[Restorer] Table #${tableIndex} failed (Attempt ${i+1}/${retries}). Error: ${error.message}`);
+            console.warn(`${tag} Table #${tableIndex} failed (Attempt ${i+1}/${retries}). Error: ${error.message}`);
             
             if (i === retries - 1) {
-                 console.error(`[Restorer] Table #${tableIndex} GAVE UP. Keeping original HTML.`);
-                 fullReasoningLog += `[Table Segment ${tableIndex}]: Failed (${error.message})\n`;
+                 console.error(`${tag} Table #${tableIndex} GAVE UP. Keeping original HTML.`);
+                 fullReasoningLog += `[${context.fileName}][Page ${context.pageNum}][Table Segment ${tableIndex}]: Failed (${error.message})\n`;
                  return tableHtml; // FALLBACK: Return original table if AI fails
             }
             
@@ -284,7 +293,7 @@ const callLayoutRestorationModel = async (
 
   // Reassemble the document
   const finalContent = processedParts.join('');
-  console.log(`[Restorer] All segments processed. Reassembled content length: ${finalContent.length}`);
+  console.log(`${tag} All segments processed. Reassembled content length: ${finalContent.length}`);
 
   return { 
       content: finalContent, 
@@ -337,14 +346,14 @@ export const processSinglePage = async (
   let imageBase64 = "";
   if (file.type === 'application/pdf') {
     const arrayBuffer = await file.arrayBuffer();
-    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer, verbosity: (pdfjsLib as any).VerbosityLevel?.ERRORS ?? 0 });
     const pdf = await loadingTask.promise;
     imageBase64 = await renderPageToImage(pdf, physicalPageNum);
   } else {
     imageBase64 = await fileToBase64(file);
   }
 
-  return await callOcrModel(imageBase64, apiKey, `Page ${physicalPageNum}`, customPrompt);
+  return await callOcrModel(imageBase64, apiKey, `${file.name} - Page ${physicalPageNum}`, customPrompt);
 };
 
 export const processDocument = async (
@@ -365,7 +374,7 @@ export const processDocument = async (
     if (fileType === 'application/pdf') {
       onProgress("正在加载 PDF...");
       const arrayBuffer = await file.arrayBuffer();
-      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer, verbosity: (pdfjsLib as any).VerbosityLevel?.ERRORS ?? 0 });
       const pdf = await loadingTask.promise;
       
       const restorationPromises: Promise<void>[] = [];
@@ -386,10 +395,13 @@ export const processDocument = async (
            // 2. Render
            const imageBase64 = await renderPageToImage(pdf, pageNum);
            if (signal?.aborted) throw new Error("Process aborted by user");
+           
+           // Keep page image for evaluation dataset export
+           onPageUpdate(i, { pdfImg: imageBase64 });
 
            // 3. OCR (DeepSeek)
            // We await OCR because we need the text for restoration input
-           const rawContent = await callOcrModel(imageBase64, apiKey, `Page ${pageNum}`, undefined, 5, signal);
+           const rawContent = await callOcrModel(imageBase64, apiKey, `${file.name} - Page ${pageNum}`, undefined, 5, signal);
            
            // CRITICAL: Callback Immediately with RAW OCR
            onPageUpdate(i, { 
@@ -403,7 +415,7 @@ export const processDocument = async (
            const hasTable = /<table/i.test(rawContent);
            
            if (!hasTable) {
-             console.log(`[Flow] Page ${pageNum}: No tables detected in raw OCR. Marking complete.`);
+             console.log(`[Flow][${file.name}][Page ${pageNum}] No tables detected in raw OCR. Marking complete.`);
              // NO TABLE -> SKIP LLM -> MARK COMPLETE
              onPageUpdate(i, {
                 status: 'complete',
@@ -413,7 +425,7 @@ export const processDocument = async (
                 }
              });
            } else {
-              console.log(`[Flow] Page ${pageNum}: Table tag detected. Triggering background restoration task...`);
+              console.log(`[Flow][${file.name}][Page ${pageNum}] Table tag detected. Triggering background restoration task...`);
               // HAS TABLE -> START BACKGROUND LLM TASK
               const restorationTask = (async () => {
                 if (signal?.aborted) return;
@@ -424,7 +436,14 @@ export const processDocument = async (
                 onPageUpdate(i, { status: 'restoring' });
                 
                 try {
-                    const restorationResult = await callLayoutRestorationModel(imageBase64, rawContent, apiKey, signal, 3);
+                    const restorationResult = await callLayoutRestorationModel(
+                      imageBase64,
+                      rawContent,
+                      apiKey,
+                      { fileName: file.name, pageNum },
+                      signal,
+                      3
+                    );
                     
                     if (signal?.aborted) return;
 
@@ -473,23 +492,30 @@ export const processDocument = async (
         const imageBase64 = await fileToBase64(file);
         
         onPageUpdate(0, { status: 'pending' });
+        onPageUpdate(0, { pdfImg: imageBase64 });
         
-        const rawContent = await callOcrModel(imageBase64, apiKey, "Image", undefined, 5, signal);
+        const rawContent = await callOcrModel(imageBase64, apiKey, `${file.name} - Image`, undefined, 5, signal);
         onPageUpdate(0, { rawOCR: rawContent, status: 'ocr_success' });
 
         const hasTable = /<table/i.test(rawContent);
 
         if (!hasTable) {
-            console.log(`[Flow] Image: No tables detected. Marking complete.`);
+            console.log(`[Flow][${file.name}][Image] No tables detected. Marking complete.`);
             onPageUpdate(0, {
                 status: 'complete',
                 verificationResult: { hasTable: false, reason: "无表格" }
             });
             return rawContent;
         } else {
-            console.log(`[Flow] Image: Table detected. Restoring...`);
+            console.log(`[Flow][${file.name}][Image] Table detected. Restoring...`);
             onProgress("正在智能还原版式...");
-            const restorationResult = await callLayoutRestorationModel(imageBase64, rawContent, apiKey, signal);
+            const restorationResult = await callLayoutRestorationModel(
+              imageBase64,
+              rawContent,
+              apiKey,
+              { fileName: file.name, pageNum: 1 },
+              signal
+            );
             
             onPageUpdate(0, {
                  restored: restorationResult.content,
