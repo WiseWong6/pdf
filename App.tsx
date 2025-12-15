@@ -195,15 +195,26 @@ const App: React.FC = () => {
     const baseName = activeFile.name.replace(/\.[^.]+$/, '');
     const rowName = `${baseName}_${currentPhysicalPage}`;
 
-    setEvalDatasetRows(prev => ([
-      ...prev,
-      { name: rowName, ocr_text: currentPageData.rawOCR, pdf_img: currentPageData.pdfImg as string }
-    ]));
+    const newRow: EvalDatasetRow = { name: rowName, ocr_text: currentPageData.rawOCR, pdf_img: currentPageData.pdfImg as string };
+    setEvalDatasetRows(prev => {
+      const existingIndex = prev.findIndex(r => r.name === rowName);
+      if (existingIndex === -1) return [...prev, newRow];
+      const next = [...prev];
+      next[existingIndex] = newRow;
+      return next;
+    });
   };
 
   const exportEvalDatasetCsv = () => {
     const csv = buildEvalDatasetCsv(evalDatasetRows);
     downloadTextFile('eval_dataset.csv', csv, 'text/csv;charset=utf-8');
+  };
+
+  const clearEvalDataset = () => {
+    if (evalDatasetRows.length === 0) return;
+    const ok = window.confirm(`确认清空已收集的 ${evalDatasetRows.length} 条评测数据吗？`);
+    if (!ok) return;
+    setEvalDatasetRows([]);
   };
 
   // Check API Key on Mount
@@ -810,7 +821,7 @@ const App: React.FC = () => {
         
         {/* Top Bar */}
         <header className="h-14 border-b border-slate-200 bg-white flex items-center justify-between px-4 shadow-sm z-10 flex-shrink-0 select-none">
-          <div className="flex items-center">
+          <div className="flex items-center min-w-0">
             <button 
               onClick={() => setSidebarOpen(!isSidebarOpen)}
               className="p-2 rounded-md hover:bg-slate-100 text-slate-600 mr-2"
@@ -830,6 +841,37 @@ const App: React.FC = () => {
                     {activeFile.status === 'completed' ? '完成' : activeFile.status === 'processing' ? '处理中' : activeFile.status === 'error' ? '错误' : activeFile.status === 'waiting_config' ? '待配置' : '排队中'} {activeFile.statusMessage ? `- ${activeFile.statusMessage}` : ''}
                  </span>
               )}
+            </div>
+            <div className="ml-2 flex-shrink-0">
+              <div className="bg-slate-100 p-1 rounded-lg flex items-center gap-1">
+                <span className="px-2 text-[10px] font-bold text-slate-500">
+                  评测集 {evalDatasetRows.length}
+                </span>
+                <button
+                  onClick={syncCurrentPageToEvalDataset}
+                  disabled={!activeFile || !currentPageData?.rawOCR || !currentPageData?.pdfImg}
+                  className="px-2 py-1 rounded flex items-center gap-1 text-xs font-medium bg-white border border-slate-200 text-slate-600 hover:text-indigo-600 hover:border-indigo-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title={!currentPageData?.pdfImg ? "等待当前页截图生成" : "同步当前页到评测集"}
+                >
+                  <ArrowUp size={14} /> 同步
+                </button>
+                <button
+                  onClick={exportEvalDatasetCsv}
+                  disabled={evalDatasetRows.length === 0}
+                  className="px-2 py-1 rounded flex items-center gap-1 text-xs font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="导出 eval_dataset.csv（下载后覆盖 eval_data/eval_dataset.csv）"
+                >
+                  <ArrowDown size={14} /> 导出
+                </button>
+                <button
+                  onClick={clearEvalDataset}
+                  disabled={evalDatasetRows.length === 0}
+                  className="px-2 py-1 rounded flex items-center gap-1 text-xs font-medium bg-white border border-slate-200 text-slate-600 hover:text-red-600 hover:border-red-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="清空已收集评测数据"
+                >
+                  <Trash2 size={14} /> 清空
+                </button>
+              </div>
             </div>
           </div>
 
@@ -887,41 +929,6 @@ const App: React.FC = () => {
                     value={verifierPromptInput}
                     onChange={(e) => setVerifierPromptInput(e.target.value)}
                   />
-                </div>
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                  <div className="flex items-center justify-between gap-3 mb-3">
-                    <div className="text-sm font-semibold text-slate-800">评测集同步（CSV）</div>
-                    <div className="text-xs text-slate-500">已收集 {evalDatasetRows.length} 条</div>
-                  </div>
-                  <div className="text-xs text-slate-600 leading-relaxed mb-3">
-                    点击“同步当前页”会把当前页的 OCR 文本与截图（Base64）加入内存评测集；再点“导出 CSV”生成文件，可覆盖仓库里的 `eval_data/eval_dataset.csv`。
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={syncCurrentPageToEvalDataset}
-                      className="flex-1 bg-white hover:bg-slate-100 text-slate-700 font-medium py-2 rounded-lg transition-colors border border-slate-200"
-                      disabled={!activeFile || !currentPageData?.rawOCR || !currentPageData?.pdfImg}
-                      title={!currentPageData?.pdfImg ? "等待当前页截图生成" : "同步当前页到评测集"}
-                    >
-                      同步当前页
-                    </button>
-                    <button
-                      onClick={exportEvalDatasetCsv}
-                      className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      disabled={evalDatasetRows.length === 0}
-                    >
-                      导出 CSV
-                    </button>
-                  </div>
-                  <div className="mt-2">
-                    <button
-                      onClick={() => setEvalDatasetRows([])}
-                      className="w-full bg-transparent hover:bg-slate-100 text-slate-600 text-xs py-2 rounded-lg transition-colors"
-                      disabled={evalDatasetRows.length === 0}
-                    >
-                      清空评测集
-                    </button>
-                  </div>
                 </div>
               </div>
               <div className="mt-6">
