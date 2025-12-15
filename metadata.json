@@ -1,0 +1,5 @@
+{
+  "name": "DocuRender Mixed-Format Viewer",
+  "description": "A specialized document viewer for mixed Markdown and HTML content, featuring split-view editing, batch file processing, and Gemini-powered document analysis.",
+  "requestFramePermissions": []
+}

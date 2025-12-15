@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DocuRender | Mixed Format Viewer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Add KaTeX CSS for LaTeX Math support -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              primary: '#0f172a', // Slate 900
+              secondary: '#334155', // Slate 700
+              accent: '#2563eb', // Blue 600
+            },
+            typography: (theme) => ({
+              DEFAULT: {
+                css: {
+                  color: theme('colors.slate.700'),
+                  h1: { color: theme('colors.slate.900') },
+                  h2: { color: theme('colors.slate.900') },
+                  strong: { color: theme('colors.slate.900') },
+                  // Improve line height for mixed math/text content
+                  p: { 
+                    lineHeight: '1.75', 
+                    marginTop: '0.75em', 
+                    marginBottom: '0.75em' 
+                  },
+                },
+              },
+            }),
+          },
+        },
+      }
+    </script>
+    <style>
+      /* Custom scrollbar for cleaner look */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #f1f5f9;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #cbd5e1;
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #94a3b8;
+      }
+      
+      /* Global Styles for Markdown Body - Clean Table Reset */
+      .markdown-body table {
+        border-collapse: collapse;
+        width: 100%;
+        margin-top: 1.5rem;
+        margin-bottom: 1.5rem;
+        font-size: 0.875rem;
+      }
+      /* Ensure rehype-raw injected tables match the style */
+      .markdown-body th {
+        background-color: #f8fafc;
+        border: 1px solid #e2e8f0;
+        padding: 0.75rem;
+        font-weight: 600;
+        text-align: left;
+        color: #1e293b;
+      }
+      .markdown-body td {
+        border: 1px solid #e2e8f0;
+        padding: 0.75rem;
+        color: #475569;
+        vertical-align: top; /* Better for multiline cell content */
+      }
+      .markdown-body tr:nth-child(even) {
+        background-color: #fcfcfc;
+      }
+
+      /* PDF Page Styling & Text Layer */
+      .react-pdf__Page__canvas {
+        margin: 0 auto;
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        border-radius: 4px;
+        display: block;
+        user-select: none;
+      }
+      
+      /* Essential CSS for react-pdf text layer */
+      .react-pdf__Page {
+        position: relative;
+        background-color: white;
+      }
+      .react-pdf__Page__textContent {
+        position: absolute;
+        top: 0;
+        left: 0;
+        transform-origin: 0 0;
+        display: block;
+        line-height: 1;
+        width: 100%;
+        height: 100%;
+        user-select: text; /* Allow selection */
+      }
+      .react-pdf__Page__textContent span {
+        color: transparent;
+        position: absolute;
+        white-space: pre;
+        cursor: text;
+        transform-origin: 0% 0%;
+      }
+      /* Custom class injected via customTextRenderer for highlighting */
+      .react-pdf__Page__textContent span.highlight {
+        background-color: rgba(255, 255, 0, 0.4);
+      }
+
+      /* Global Highlight Style for Editor and Render */
+      mark {
+        background-color: rgba(255, 255, 0, 0.4);
+        color: inherit;
+        padding: 0;
+      }
+
+      /* Fix Latex font size in mixed text */
+      .katex {
+        font-size: 1.1em; 
+      }
+      
+      /* Ensure superscripts don't mess up line-height too much */
+      sup {
+        vertical-align: super;
+        font-size: smaller;
+      }
+    </style>
+    <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.3.1",
+    "react/": "https://esm.sh/react@18.3.1/",
+    "react-dom": "https://esm.sh/react-dom@18.3.1?deps=react@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client?deps=react@18.3.1",
+    "lucide-react": "https://esm.sh/lucide-react@0.363.0?deps=react@18.3.1",
+    "react-markdown": "https://esm.sh/react-markdown@9.0.1?deps=react@18.3.1,react-dom@18.3.1",
+    "@google/genai": "https://esm.sh/@google/genai@0.1.1",
+    "rehype-raw": "https://esm.sh/rehype-raw@7.0.0?deps=react@18.3.1",
+    "remark-gfm": "https://esm.sh/remark-gfm@4.0.0?deps=react@18.3.1",
+    "remark-math": "https://esm.sh/remark-math@6.0.0?deps=react@18.3.1",
+    "rehype-katex": "https://esm.sh/rehype-katex@7.0.0?deps=react@18.3.1",
+    "react-pdf": "https://esm.sh/react-pdf@9.1.0?deps=react@18.3.1,react-dom@18.3.1",
+    "pdfjs-dist": "https://esm.sh/pdfjs-dist@4.4.168",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/"
+  }
+}
+</script>
+  <link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
