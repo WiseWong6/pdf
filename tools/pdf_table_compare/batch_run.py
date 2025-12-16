@@ -29,51 +29,51 @@ def iter_pdf_paths(pdf_dir: str) -> List[str]:
     return sorted(glob.glob(os.path.join(pdf_dir, "*.pdf")))
 
 
-def extract_camelot_table_pages(pdf_path: str) -> Tuple[Set[int], Optional[str]]:
+def extract_camelot_table_pages(pdf_path: str, flavor: str) -> Tuple[Set[int], Optional[str]]:
     if camelot is None:
         return set(), "camelot 未安装"
 
     pages: Set[int] = set()
-    errors: List[str] = []
 
-    for flavor in ("lattice", "stream"):
+    try:
+        tables = camelot.read_pdf(pdf_path, pages="all", flavor=flavor)
+    except Exception as e:  # noqa: BLE001
+        return set(), f"{type(e).__name__}: {e}"
+
+    for t in tables:
+        page = getattr(t, "page", None)
+        if page is None:
+            try:
+                page = t.parsing_report.get("page")
+            except Exception:  # noqa: BLE001
+                page = None
+        if page is None:
+            continue
         try:
-            tables = camelot.read_pdf(pdf_path, pages="all", flavor=flavor)
-            for t in tables:
-                page = getattr(t, "page", None)
-                if page is None:
-                    try:
-                        page = t.parsing_report.get("page")
-                    except Exception:  # noqa: BLE001
-                        page = None
-                if page is None:
-                    continue
-                try:
-                    pages.add(int(page))
-                except Exception:  # noqa: BLE001
-                    continue
-        except Exception as e:  # noqa: BLE001
-            errors.append(f"{flavor}: {type(e).__name__}: {e}")
+            pages.add(int(page))
+        except Exception:  # noqa: BLE001
+            continue
 
-    return pages, ("; ".join(errors) if errors else None)
+    return pages, None
 
 
 def to_output_row(r: PageResult) -> dict:
     return {
         "pdf名称": r.pdf_name,
         "页码": r.page_num,
-        "camelot识别是否有表格（是、否）": bool_to_cn(r.camelot_has_table),
+        "camelot Stream识别是否有表格（是、否）": bool_to_cn(r.camelot_stream_has_table),
+        "camelot Lattice识别是否有表格（是、否）": bool_to_cn(r.camelot_lattice_has_table),
         "deepseekoce识别是否有表格（是、否）": bool_to_cn(r.deepseek_has_table),
     }
 
 
-def load_existing_keys(csv_path: str) -> Set[Tuple[str, int]]:
+def load_existing_keys(csv_path: str, required_columns: List[str]) -> Set[Tuple[str, int]]:
     if not os.path.exists(csv_path):
         return set()
-    try:
-        df = pd.read_csv(csv_path)
-    except Exception:  # noqa: BLE001
-        return set()
+    df = pd.read_csv(csv_path)
+    missing = [c for c in required_columns if c not in df.columns]
+    if missing:
+        raise ValueError(f"无法 resume：现有 CSV 缺少列 {missing}（请删除旧文件或关闭 --resume）")
     keys: Set[Tuple[str, int]] = set()
     for _, row in df.iterrows():
         try:
@@ -83,8 +83,8 @@ def load_existing_keys(csv_path: str) -> Set[Tuple[str, int]]:
     return keys
 
 
-def append_rows(csv_path: str, rows: Iterable[dict]) -> None:
-    df = pd.DataFrame(list(rows))
+def append_rows(csv_path: str, rows: Iterable[dict], columns: List[str]) -> None:
+    df = pd.DataFrame(list(rows), columns=columns)
     if df.empty:
         return
     header = not os.path.exists(csv_path)
@@ -116,7 +116,28 @@ def main() -> int:
 
     Path(os.path.dirname(args.out)).mkdir(parents=True, exist_ok=True)
 
-    processed = load_existing_keys(args.out) if args.resume else set()
+    required_columns = [
+        "pdf名称",
+        "页码",
+        "camelot Stream识别是否有表格（是、否）",
+        "camelot Lattice识别是否有表格（是、否）",
+        "deepseekoce识别是否有表格（是、否）",
+    ]
+
+    if not args.resume:
+        if os.path.exists(args.out):
+            os.remove(args.out)
+        if os.path.exists(args.final_out):
+            os.remove(args.final_out)
+
+    if args.resume:
+        try:
+            processed = load_existing_keys(args.out, required_columns)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+    else:
+        processed = set()
     if args.resume and processed:
         print(f"[Resume] 已存在记录：{len(processed)} 行，将跳过已处理页")
 
@@ -135,9 +156,12 @@ def main() -> int:
         pdf_name = os.path.basename(pdf_path)
         print(f"[{pdf_idx}/{len(pdf_paths)}] 处理：{pdf_name}")
 
-        camelot_pages, camelot_err = extract_camelot_table_pages(pdf_path)
-        if camelot_err:
-            print(f"  [Camelot] 警告：{camelot_err}")
+        camelot_stream_pages, camelot_stream_err = extract_camelot_table_pages(pdf_path, "stream")
+        camelot_lattice_pages, camelot_lattice_err = extract_camelot_table_pages(pdf_path, "lattice")
+        if camelot_stream_err:
+            print(f"  [Camelot Stream] 警告：{camelot_stream_err}")
+        if camelot_lattice_err:
+            print(f"  [Camelot Lattice] 警告：{camelot_lattice_err}")
 
         doc = fitz.open(pdf_path)
         total_pages = doc.page_count
@@ -148,7 +172,8 @@ def main() -> int:
             if key in processed:
                 continue
 
-            camelot_has = page_num in camelot_pages
+            camelot_stream_has = page_num in camelot_stream_pages
+            camelot_lattice_has = page_num in camelot_lattice_pages
 
             deepseek_has = False
             if args.enable_ocr:
@@ -166,25 +191,30 @@ def main() -> int:
             r = PageResult(
                 pdf_name=pdf_name,
                 page_num=page_num,
-                camelot_has_table=camelot_has,
+                camelot_stream_has_table=camelot_stream_has,
+                camelot_lattice_has_table=camelot_lattice_has,
                 deepseek_has_table=deepseek_has,
             )
             new_rows.append(to_output_row(r))
             new_count += 1
 
             if len(new_rows) >= 50:
-                append_rows(args.out, new_rows)
+                append_rows(args.out, new_rows, required_columns)
                 new_rows.clear()
                 print(f"  已写入 {new_count} 行…")
 
         doc.close()
 
     if new_rows:
-        append_rows(args.out, new_rows)
+        append_rows(args.out, new_rows, required_columns)
         new_rows.clear()
 
     # 生成最终带 BOM 的 CSV
     df = pd.read_csv(args.out)
+    missing = [c for c in required_columns if c not in df.columns]
+    if missing:
+        print(f"输出 CSV 缺少列：{missing}", file=sys.stderr)
+        return 2
     df.to_csv(args.final_out, index=False, encoding="utf-8-sig")
     print(f"完成：{args.final_out}（共 {len(df)} 行）")
     return 0

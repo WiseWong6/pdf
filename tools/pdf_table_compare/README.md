@@ -7,7 +7,7 @@
 
 导出 CSV 表头固定为：
 
-`pdf名称、页码、camelot识别是否有表格（是、否）、deepseekoce识别是否有表格（是、否）`
+`pdf名称、页码、camelot Stream识别是否有表格（是、否）、camelot Lattice识别是否有表格（是、否）、deepseekoce识别是否有表格（是、否）`
 
 ## 环境要求
 
@@ -57,8 +57,15 @@ streamlit run tools/pdf_table_compare/app.py
 2. 点击“开始分析”
 3. 下载导出的 CSV
 
+## 批量跑整个 `pdf/` 目录（可选）
+
+```bash
+source tools/pdf_table_compare/.venv/bin/activate
+export SILICONFLOW_API_KEY="你的key"
+python tools/pdf_table_compare/batch_run.py --enable-ocr
+```
+
 ## 注意
 
 - Camelot 对“扫描版图片 PDF”的识别通常效果很弱（因为它主要解析 PDF 内的文本/结构），这是工具对比的预期现象之一。
 - DeepSeek OCR 调用会按页请求，页数多时耗时明显；如遇 429 会自动重试并退避等待。
-

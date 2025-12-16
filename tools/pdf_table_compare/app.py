@@ -4,7 +4,7 @@ import re
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional, Set, Tuple
 
 import pandas as pd
 import requests
@@ -30,7 +30,8 @@ DEFAULT_OCR_PROMPT = "<image>\n<|grounding|>Convert the document to markdown."
 class PageResult:
     pdf_name: str
     page_num: int
-    camelot_has_table: bool
+    camelot_stream_has_table: bool
+    camelot_lattice_has_table: bool
     deepseek_has_table: bool
 
 
@@ -149,21 +150,38 @@ def deepseek_ocr_markdown(
     raise last_error or RuntimeError("DeepSeek OCR 失败（未知错误）")
 
 
-def camelot_has_table(pdf_path: str, page_num: int) -> Tuple[bool, Optional[str]]:
-    if camelot is None:
-        return False, "缺少依赖：camelot 未安装"
+def pages_to_camelot_spec(pages: List[int], total_pages: int) -> str:
+    if pages == list(range(1, total_pages + 1)):
+        return "all"
+    if pages and pages == list(range(pages[0], pages[-1] + 1)):
+        return f"{pages[0]}-{pages[-1]}"
+    return ",".join(str(p) for p in pages)
 
-    last_error: Optional[str] = None
-    for flavor in ("lattice", "stream"):
-        try:
-            tables = camelot.read_pdf(pdf_path, pages=str(page_num), flavor=flavor)
-            has_table = bool(getattr(tables, "n", 0)) or len(tables) > 0
-            if has_table:
-                return True, None
-        except Exception as e:  # noqa: BLE001
-            last_error = f"{type(e).__name__}: {e}"
+
+def camelot_table_pages(pdf_path: str, pages_spec: str, flavor: str) -> Tuple[Set[int], Optional[str]]:
+    if camelot is None:
+        return set(), "缺少依赖：camelot 未安装"
+
+    try:
+        tables = camelot.read_pdf(pdf_path, pages=pages_spec, flavor=flavor)
+    except Exception as e:  # noqa: BLE001
+        return set(), f"{type(e).__name__}: {e}"
+
+    pages: Set[int] = set()
+    for t in tables:
+        page = getattr(t, "page", None)
+        if page is None:
+            try:
+                page = t.parsing_report.get("page")
+            except Exception:  # noqa: BLE001
+                page = None
+        if page is None:
             continue
-    return False, last_error
+        try:
+            pages.add(int(page))
+        except Exception:  # noqa: BLE001
+            continue
+    return pages, None
 
 
 def bool_to_cn(value: bool) -> str:
@@ -176,7 +194,8 @@ def build_results_df(results: Iterable[PageResult]) -> pd.DataFrame:
             {
                 "pdf名称": r.pdf_name,
                 "页码": r.page_num,
-                "camelot识别是否有表格（是、否）": bool_to_cn(r.camelot_has_table),
+                "camelot Stream识别是否有表格（是、否）": bool_to_cn(r.camelot_stream_has_table),
+                "camelot Lattice识别是否有表格（是、否）": bool_to_cn(r.camelot_lattice_has_table),
                 "deepseekoce识别是否有表格（是、否）": bool_to_cn(r.deepseek_has_table),
             }
             for r in results
@@ -192,7 +211,7 @@ def main() -> None:
         st.markdown(
             "- Camelot：直接解析 PDF 判断是否有表格\n"
             "- DeepSeek-OCR：对每页做 OCR，判断结果里是否包含 `<table` 标签\n"
-            "- 输出 CSV：`pdf名称、页码、camelot识别是否有表格（是、否）、deepseekoce识别是否有表格（是、否）`"
+            "- 输出 CSV：`pdf名称、页码、camelot Stream识别是否有表格（是、否）、camelot Lattice识别是否有表格（是、否）、deepseekoce识别是否有表格（是、否）`"
         )
 
     uploaded = st.file_uploader("上传 PDF", type=["pdf"])
@@ -233,15 +252,23 @@ def main() -> None:
 
         st.info(f"PDF：{pdf_name}（共 {total_pages} 页），本次分析页码：{pages[0]}..{pages[-1]}（{len(pages)} 页）")
 
+        pages_spec = pages_to_camelot_spec(pages, total_pages)
+        with st.spinner("Camelot 分析中（Stream/Lattice）…"):
+            stream_pages, stream_err = camelot_table_pages(pdf_path, pages_spec, "stream")
+            lattice_pages, lattice_err = camelot_table_pages(pdf_path, pages_spec, "lattice")
+        if stream_err:
+            st.caption(f"[Camelot Stream] 异常：{stream_err}")
+        if lattice_err:
+            st.caption(f"[Camelot Lattice] 异常：{lattice_err}")
+
         progress = st.progress(0, text="准备开始…")
         results: List[PageResult] = []
 
         for idx, page_num in enumerate(pages, start=1):
             progress.progress((idx - 1) / max(1, len(pages)), text=f"处理中：第 {page_num} 页")
 
-            camelot_ok, camelot_err = camelot_has_table(pdf_path, page_num)
-            if camelot_err:
-                st.caption(f"[Camelot] 第 {page_num} 页异常：{camelot_err}")
+            camelot_stream_ok = page_num in stream_pages
+            camelot_lattice_ok = page_num in lattice_pages
 
             deepseek_ok = False
             if enable_ocr:
@@ -257,7 +284,8 @@ def main() -> None:
                 PageResult(
                     pdf_name=pdf_name,
                     page_num=page_num,
-                    camelot_has_table=camelot_ok,
+                    camelot_stream_has_table=camelot_stream_ok,
+                    camelot_lattice_has_table=camelot_lattice_ok,
                     deepseek_has_table=deepseek_ok,
                 )
             )
@@ -279,4 +307,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
